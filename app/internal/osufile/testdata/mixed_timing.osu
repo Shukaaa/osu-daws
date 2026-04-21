@@ -1,0 +1,38 @@
+osu file format v14
+
+[General]
+AudioFilename: audio.mp3
+Mode: 0
+
+[Editor]
+BeatDivisor: 4
+
+[Metadata]
+Title:Mixed Timing
+Artist:Tester
+Creator:Mapper
+Version:Hard
+
+[Difficulty]
+HPDrainRate:5
+CircleSize:4
+OverallDifficulty:7
+ApproachRate:8
+SliderMultiplier:1.6
+SliderTickRate:1
+
+[Events]
+0,0,"bg.jpg",0,0
+
+[TimingPoints]
+0,500,4,1,0,70,1,0
+1000,-100,4,1,0,60,0,0
+2000,-80,4,1,0,55,0,0
+4000,400,3,2,0,80,1,0
+6000,-125,3,2,0,75,0,0
+
+[HitObjects]
+256,192,0,1,0,0:0:0:0:
+200,100,500,1,2,0:0:0:0:
+100,100,1500,2,0,B|200:200|300:100,1,150,0|0,0:0|0:0,0:0:0:0:
+

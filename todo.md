@@ -1,0 +1,3 @@
+- Ci / CD + Versionierung und Bereitstellung der DAW Templates
+- Gucken ob man FPC dynamisch konfigurieren kann
+- 

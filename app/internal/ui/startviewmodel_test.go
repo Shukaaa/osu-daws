@@ -328,3 +328,84 @@ func TestStartVM_ExportImportRoundTrip(t *testing.T) {
 			len(dstSVM.Workspaces()))
 	}
 }
+
+func TestStartVM_LastOpened_MarksAndResolves(t *testing.T) {
+	root := t.TempDir()
+	svm := NewStartViewModel(root)
+
+	// No history yet.
+	if _, ok := svm.LastOpenedSummary(); ok {
+		t.Error("fresh VM should not report a last opened workspace")
+	}
+
+	first, err := createTestWorkspace(svm, "First")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := createTestWorkspace(svm, "Second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Mark only the second one.
+	svm.MarkOpened(second)
+	if err := svm.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := svm.LastOpenedSummary()
+	if !ok {
+		t.Fatal("expected a last-opened entry")
+	}
+	if got.ID != second.Project.ID {
+		t.Errorf("last opened = %q, want %q", got.ID, second.Project.ID)
+	}
+	_ = first
+}
+
+func TestStartVM_LastOpened_IgnoresDeletedWorkspace(t *testing.T) {
+	root := t.TempDir()
+	svm := NewStartViewModel(root)
+
+	ws, err := createTestWorkspace(svm, "Doomed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svm.MarkOpened(ws)
+
+	// Nuke the workspace directory, refresh, then query.
+	if err := os.RemoveAll(ws.Paths.Root); err != nil {
+		t.Fatal(err)
+	}
+	if err := svm.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := svm.LastOpenedSummary(); ok {
+		t.Error("last opened must be hidden when target workspace no longer exists")
+	}
+}
+
+func TestStartVM_LastOpened_OnlyOneAtATime(t *testing.T) {
+	root := t.TempDir()
+	svm := NewStartViewModel(root)
+
+	a, _ := createTestWorkspace(svm, "A")
+	b, _ := createTestWorkspace(svm, "B")
+	c, _ := createTestWorkspace(svm, "C")
+
+	svm.MarkOpened(a)
+	svm.MarkOpened(b)
+	svm.MarkOpened(c)
+	_ = svm.Refresh()
+
+	got, ok := svm.LastOpenedSummary()
+	if !ok || got.ID != c.Project.ID {
+		t.Errorf("expected last opened = C (%q), got ok=%v id=%q",
+			c.Project.ID, ok, got.ID)
+	}
+}
+
+func TestStartVM_LastOpened_NilSafe(t *testing.T) {
+	svm := NewStartViewModel(t.TempDir())
+	// Must not panic.
+	svm.MarkOpened(nil)
+	svm.MarkOpened(&workspace.Workspace{})
+}

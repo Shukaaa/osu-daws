@@ -27,6 +27,20 @@ type StartScreenCallbacks struct {
 // BuildStartScreen constructs the workspace overview. The caller owns the
 // window and must attach the returned object via SetContent.
 func BuildStartScreen(w fyne.Window, svm *StartViewModel, cb StartScreenCallbacks) fyne.CanvasObject {
+	origOpen, origCreate := cb.OnOpen, cb.OnCreate
+	cb.OnOpen = func(ws *workspace.Workspace) {
+		svm.MarkOpened(ws)
+		if origOpen != nil {
+			origOpen(ws)
+		}
+	}
+	cb.OnCreate = func(ws *workspace.Workspace) {
+		svm.MarkOpened(ws)
+		if origCreate != nil {
+			origCreate(ws)
+		}
+	}
+
 	content := container.NewStack()
 
 	var rerender func()
@@ -143,10 +157,50 @@ func buildWorkspaceList(
 	}
 
 	body := container.NewVScroll(rows)
-	if banner := maybeSkippedBanner(svm.Skipped()); banner != nil {
+
+	var top fyne.CanvasObject
+	if !filtering {
+		if last, ok := svm.LastOpenedSummary(); ok {
+			top = buildLastOpenedSection(w, cb, last)
+		}
+	}
+
+	banner := maybeSkippedBanner(svm.Skipped())
+	switch {
+	case top != nil && banner != nil:
+		return container.NewBorder(container.NewVBox(top, banner), nil, nil, nil, body)
+	case top != nil:
+		return container.NewBorder(top, nil, nil, nil, body)
+	case banner != nil:
 		return container.NewBorder(banner, nil, nil, nil, body)
 	}
 	return body
+}
+
+func buildLastOpenedSection(
+	w fyne.Window,
+	cb StartScreenCallbacks,
+	s workspace.Summary,
+) fyne.CanvasObject {
+	openBtn := widget.NewButton("Open", func() {
+		ws, err := workspace.LoadWorkspace(s.Root)
+		if err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
+		if cb.OnOpen != nil {
+			cb.OnOpen(ws)
+		}
+	})
+	openBtn.Importance = widget.HighImportance
+
+	meta := widget.NewLabel(formatMeta(s))
+	meta.TextStyle = fyne.TextStyle{Italic: true}
+	meta.Wrapping = fyne.TextWrapWord
+
+	body := container.NewBorder(nil, nil, nil, openBtn, meta)
+	card := widget.NewCard("Last opened", displayName(s.Name), body)
+	return container.NewPadded(card)
 }
 
 func workspaceRow(s workspace.Summary, onOpen, onExport func()) fyne.CanvasObject {

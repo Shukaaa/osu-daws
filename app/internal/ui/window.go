@@ -77,6 +77,7 @@ func RunWithOpenPath(openProjectPath string) {
 		ws, err := workspace.LoadWorkspaceFromProjectFile(openProjectPath)
 		if err == nil {
 			activeWorkspace = ws
+			_ = workspace.SaveLastOpened(projectsRoot, ws.Project.ID)
 			showMain(w, showStart)
 			w.ShowAndRun()
 			return

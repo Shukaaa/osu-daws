@@ -1,8 +1,8 @@
 # Better Workspaces (Planned Release: 0.3.0)
-- Last opened workspace
+- ✅ Last opened workspace
 - ✅ Search Workspace List
 - Archive Workspaces to ignore them in the list and show them in a separate list of archived workspaces
-- Export Workspaces as zip files that can be shared with other people. This zip file would include the workspace settings, the DAW template with the hitsound structure, and the generated diff export.
+- ✅ Export Workspaces as zip files that can be shared with other people. This zip file would include the workspace settings, the DAW template with the hitsound structure, and the generated diff export.
 
 # UX Improvements (Planned Release: 0.3.0)
 - Better Feedback for successful actions (e.g. "Hitsound diff generated successfully!" notification after generating the diff)

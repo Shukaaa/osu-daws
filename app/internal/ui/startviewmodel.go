@@ -120,3 +120,23 @@ func (svm *StartViewModel) ExportWorkspaceToZip(summary workspace.Summary, destZ
 	}
 	return workspace.ExportWorkspace(ws, destZip)
 }
+
+func (svm *StartViewModel) MarkOpened(ws *workspace.Workspace) {
+	if ws == nil || ws.Project == nil {
+		return
+	}
+	_ = workspace.SaveLastOpened(svm.ProjectsRoot, ws.Project.ID)
+}
+
+func (svm *StartViewModel) LastOpenedSummary() (workspace.Summary, bool) {
+	id, ok, _ := workspace.LoadLastOpened(svm.ProjectsRoot)
+	if !ok {
+		return workspace.Summary{}, false
+	}
+	for _, s := range svm.Workspaces() {
+		if s.ID == id {
+			return s, true
+		}
+	}
+	return workspace.Summary{}, false
+}

@@ -287,3 +287,44 @@ func namesOf(ws []workspace.Summary) []string {
 	}
 	return out
 }
+
+func TestStartVM_ExportImportRoundTrip(t *testing.T) {
+	srcRoot := t.TempDir()
+	dstRoot := t.TempDir()
+	zipPath := filepath.Join(t.TempDir(), "export.zip")
+
+	srcSVM := NewStartViewModel(srcRoot)
+	if _, err := createTestWorkspace(srcSVM, "Round Trip"); err != nil {
+		t.Fatal(err)
+	}
+	if err := srcSVM.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	items := srcSVM.Workspaces()
+	if len(items) != 1 {
+		t.Fatalf("expected 1 workspace, got %d", len(items))
+	}
+
+	if err := srcSVM.ExportWorkspaceToZip(items[0], zipPath); err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	info, err := os.Stat(zipPath)
+	if err != nil || info.Size() == 0 {
+		t.Fatalf("zip file missing or empty: %v", err)
+	}
+
+	// Import into a separate projects root.
+	dstSVM := NewStartViewModel(dstRoot)
+	imported, err := dstSVM.ImportWorkspaceFromZip(zipPath)
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if imported.Project.Name != "Round Trip" {
+		t.Errorf("imported name = %q", imported.Project.Name)
+	}
+	// View model should see the new workspace without an extra Refresh.
+	if len(dstSVM.Workspaces()) != 1 {
+		t.Errorf("expected 1 imported workspace after refresh, got %d",
+			len(dstSVM.Workspaces()))
+	}
+}

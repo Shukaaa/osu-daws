@@ -44,6 +44,10 @@ func BuildStartScreen(w fyne.Window, svm *StartViewModel, cb StartScreenCallback
 		rerender()
 	})
 
+	importBtn := widget.NewButton("Import…", func() {
+		showImportWorkspaceDialog(w, svm, cb, rerender)
+	})
+
 	searchEntry := widget.NewEntry()
 	searchEntry.SetPlaceHolder("Search workspaces by name…")
 	searchEntry.SetText(svm.SearchQuery)
@@ -55,7 +59,7 @@ func BuildStartScreen(w fyne.Window, svm *StartViewModel, cb StartScreenCallback
 	header := container.NewBorder(
 		nil, nil,
 		sectionTitle("Workspaces"),
-		container.NewHBox(refreshBtn, createBtn),
+		container.NewHBox(refreshBtn, importBtn, createBtn),
 		searchEntry,
 	)
 
@@ -120,16 +124,21 @@ func buildWorkspaceList(
 	rows := container.NewVBox()
 	for i := range items {
 		item := items[i]
-		rows.Add(workspaceRow(item, func() {
-			ws, err := workspace.LoadWorkspace(item.Root)
-			if err != nil {
-				dialog.ShowError(err, w)
-				return
-			}
-			if cb.OnOpen != nil {
-				cb.OnOpen(ws)
-			}
-		}))
+		rows.Add(workspaceRow(item,
+			func() {
+				ws, err := workspace.LoadWorkspace(item.Root)
+				if err != nil {
+					dialog.ShowError(err, w)
+					return
+				}
+				if cb.OnOpen != nil {
+					cb.OnOpen(ws)
+				}
+			},
+			func() {
+				showExportWorkspaceDialog(w, svm, item)
+			},
+		))
 		rows.Add(vSpace(4))
 	}
 
@@ -140,12 +149,14 @@ func buildWorkspaceList(
 	return body
 }
 
-func workspaceRow(s workspace.Summary, onOpen func()) fyne.CanvasObject {
+func workspaceRow(s workspace.Summary, onOpen, onExport func()) fyne.CanvasObject {
 	name := widget.NewLabel(displayName(s.Name))
 	name.TextStyle = fyne.TextStyle{Bold: true}
 
 	openBtn := widget.NewButton("Open", onOpen)
 	openBtn.Importance = widget.HighImportance
+
+	exportBtn := widget.NewButton("Export…", onExport)
 
 	meta := widget.NewLabel(formatMeta(s))
 	meta.TextStyle = fyne.TextStyle{Italic: true}
@@ -155,8 +166,10 @@ func workspaceRow(s workspace.Summary, onOpen func()) fyne.CanvasObject {
 	path.TextStyle = fyne.TextStyle{Italic: true}
 	path.Wrapping = fyne.TextWrapWord
 
+	actions := container.NewHBox(exportBtn, openBtn)
+
 	body := container.NewVBox(
-		container.NewBorder(nil, nil, nil, openBtn, name),
+		container.NewBorder(nil, nil, nil, actions, name),
 		path,
 		meta,
 	)
@@ -376,4 +389,86 @@ func formatCreateError(err error) string {
 		return string(b)
 	}
 	return err.Error()
+}
+
+// showExportWorkspaceDialog prompts the user for a destination .zip
+// and exports the selected workspace there. Uses Fyne's file save
+// dialog; the view model owns the actual zip write.
+func showExportWorkspaceDialog(
+	w fyne.Window,
+	svm *StartViewModel,
+	item workspace.Summary,
+) {
+	fd := dialog.NewFileSave(func(wc fyne.URIWriteCloser, err error) {
+		if err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
+		if wc == nil {
+			return // user cancelled
+		}
+		// We need the target path; Fyne's URIWriteCloser exposes it
+		// via URI().Path(). Close the handle first so we own the file.
+		target := wc.URI().Path()
+		_ = wc.Close()
+
+		if !strings.EqualFold(filepath.Ext(target), workspace.ArchiveFileExtension) {
+			target += workspace.ArchiveFileExtension
+		}
+		if err := svm.ExportWorkspaceToZip(item, target); err != nil {
+			dialog.ShowError(fmt.Errorf("export failed: %w", err), w)
+			return
+		}
+		dialog.ShowInformation(
+			"Workspace exported",
+			"Saved to:\n"+target,
+			w,
+		)
+	}, w)
+
+	// Suggest a friendly filename derived from the workspace name.
+	fd.SetFileName(workspace.SuggestExportFileName(&workspace.Workspace{
+		Project: &workspace.ProjectFile{Name: item.Name},
+	}))
+	fd.SetFilter(storage.NewExtensionFileFilter([]string{workspace.ArchiveFileExtension}))
+	fd.Show()
+}
+
+// showImportWorkspaceDialog prompts the user for a .zip archive and
+// imports it under a fresh workspace ID. On success the list refreshes;
+// the callback opens the newly imported workspace if OnCreate is wired.
+func showImportWorkspaceDialog(
+	w fyne.Window,
+	svm *StartViewModel,
+	cb StartScreenCallbacks,
+	rerender func(),
+) {
+	fd := dialog.NewFileOpen(func(rc fyne.URIReadCloser, err error) {
+		if err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
+		if rc == nil {
+			return // user cancelled
+		}
+		src := rc.URI().Path()
+		_ = rc.Close()
+
+		ws, err := svm.ImportWorkspaceFromZip(src)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("import failed: %w", err), w)
+			return
+		}
+		rerender()
+		dialog.ShowInformation(
+			"Workspace imported",
+			fmt.Sprintf("%q was imported successfully.", ws.Project.Name),
+			w,
+		)
+		if cb.OnCreate != nil {
+			cb.OnCreate(ws)
+		}
+	}, w)
+	fd.SetFilter(storage.NewExtensionFileFilter([]string{workspace.ArchiveFileExtension}))
+	fd.Show()
 }

@@ -103,3 +103,20 @@ func (svm *StartViewModel) CreateWorkspace(req workspace.CreateRequest) (*worksp
 	_ = svm.Refresh()
 	return ws, nil
 }
+
+func (svm *StartViewModel) ImportWorkspaceFromZip(zipPath string) (*workspace.Workspace, error) {
+	ws, err := workspace.ImportWorkspace(svm.ProjectsRoot, zipPath)
+	if err != nil {
+		return nil, err
+	}
+	_ = svm.Refresh()
+	return ws, nil
+}
+
+func (svm *StartViewModel) ExportWorkspaceToZip(summary workspace.Summary, destZip string) error {
+	ws, err := workspace.LoadWorkspace(summary.Root)
+	if err != nil {
+		return err
+	}
+	return workspace.ExportWorkspace(ws, destZip)
+}

@@ -81,14 +81,18 @@ func TestFLStudioInit_MarkerIncludesLayoutInfo(t *testing.T) {
 	if err := json.Unmarshal(data, &info); err != nil {
 		t.Fatal(err)
 	}
-	if info.RootDir != FLStudioRootDir {
-		t.Errorf("RootDir = %q, want %q", info.RootDir, FLStudioRootDir)
+	var extra FLStudioExtra
+	if err := info.DecodeExtra(&extra); err != nil {
+		t.Fatalf("decode extra: %v", err)
 	}
-	if info.EntryFile != FLStudioEntryFile {
-		t.Errorf("EntryFile = %q, want %q", info.EntryFile, FLStudioEntryFile)
+	if extra.RootDir != FLStudioRootDir {
+		t.Errorf("RootDir = %q, want %q", extra.RootDir, FLStudioRootDir)
 	}
-	if !strings.HasSuffix(info.EntryFile, ".flp") {
-		t.Errorf("EntryFile should end in .flp, got %q", info.EntryFile)
+	if extra.EntryFile != FLStudioEntryFile {
+		t.Errorf("EntryFile = %q, want %q", extra.EntryFile, FLStudioEntryFile)
+	}
+	if !strings.HasSuffix(extra.EntryFile, ".flp") {
+		t.Errorf("EntryFile should end in .flp, got %q", extra.EntryFile)
 	}
 }
 

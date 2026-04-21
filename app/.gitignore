@@ -1,0 +1,21 @@
+# Build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Fyne packaging output
+/osu!daws.exe
+/osu-daws.exe
+
+# Go workspace / test
+*.test
+*.out
+/vendor/
+/dist/
+
+# IDE
+.idea/
+.vscode/
+

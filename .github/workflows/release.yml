@@ -1,0 +1,91 @@
+name: release
+
+#   feat: ...                                 -> minor bump (0.X.0)
+#   fix:  ...                                 -> patch bump (0.0.X)
+#   perf: / refactor: / docs: / chore: ...    -> no release
+#   feat!: ... / BREAKING CHANGE: ...         -> major bump (X.0.0)
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Semantic Release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.semrel.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run go-semantic-release
+        id: semrel
+        uses: go-semantic-release/action@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          allow-initial-development-versions: true
+          changelog-generator-opt: "emojis=true"
+
+  build-windows:
+    name: Build Windows exe
+    needs: release
+    if: needs.release.outputs.version != ''
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release.outputs.version }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: app/go.sum
+
+      - name: Patch Version in FyneApp.toml
+        shell: pwsh
+        run: |
+          $v = "${{ needs.release.outputs.version }}"
+          (Get-Content FyneApp.toml) `
+            -replace '^Version\s*=\s*".*"', "Version = ""$v""" `
+            | Set-Content FyneApp.toml
+          Get-Content FyneApp.toml
+
+      - name: Install Fyne CLI (matching lib version)
+        shell: pwsh
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          $fyneVersion = (go list -m -f '{{.Version}}' fyne.io/fyne/v2).Trim()
+          Write-Host "Installing fyne CLI @ $fyneVersion"
+          go install "fyne.io/fyne/v2/cmd/fyne@$fyneVersion"
+
+      - name: Build & package (fyne)
+        shell: pwsh
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          fyne package -os windows -icon icon.png -name osu-daws
+
+      - name: Rename artifact
+        shell: pwsh
+        run: |
+          $v = "${{ needs.release.outputs.version }}"
+          $out = "osu-daws-$v-windows-amd64.exe"
+          Rename-Item -Path "osu-daws.exe" -NewName $out
+          "ARTIFACT=app/$out" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Upload asset to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.release.outputs.version }}
+          files: ${{ env.ARTIFACT }}
+          fail_on_unmatched_files: true

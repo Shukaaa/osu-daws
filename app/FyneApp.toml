@@ -1,0 +1,8 @@
+website = "https://example.com"
+
+[Details]
+Icon = "icon.png"
+Name = "osu!daws"
+ID = "rip.shuka.osudaws"
+Version = "0.1.0"
+Build = 1

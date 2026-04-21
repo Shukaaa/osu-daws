@@ -1,0 +1,42 @@
+osu file format v14
+
+[General]
+AudioFilename:audio.mp3
+PreviewTime:12345
+StackLeniency:0
+Mode:2
+
+[Editor]
+BeatDivisor:4
+
+[Metadata]
+Title:Test Song
+Artist:Tester
+Creator:Mapper
+Version:osu!daw's HS
+Tags:osu daws test
+BeatmapID:0
+BeatmapSetID:-1
+
+[Difficulty]
+HPDrainRate:5
+CircleSize:4
+OverallDifficulty:5
+ApproachRate:5
+SliderMultiplier:1.4
+SliderTickRate:1
+
+[Events]
+//Background and Video events
+0,0,"bg.jpg",0,0
+//Break Periods
+
+[TimingPoints]
+0,500,4,1,0,70,1,0
+1000,-100,4,0,0,60,0,0
+2000,-100,4,0,2,80,0,0
+
+[HitObjects]
+256,192,1000,1,1,3:0:0:0:
+256,192,2000,1,9,3:0:2:0:
+

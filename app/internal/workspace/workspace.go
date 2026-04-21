@@ -79,9 +79,6 @@ type SegmentInput struct {
 	Label         string `json:"label,omitempty"`
 }
 
-// ProjectFile is the on-disk model of project.odaw. It is serialised as
-// JSON with stable field tags so new optional fields can be added with
-// `omitempty` without breaking older projects.
 type ProjectFile struct {
 	Version int `json:"version"`
 
@@ -94,6 +91,8 @@ type ProjectFile struct {
 	DefaultSampleset domain.Sampleset `json:"default_sampleset"`
 
 	Segments []SegmentInput `json:"segments"`
+
+	Archived bool `json:"archived,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

@@ -140,3 +140,33 @@ func (svm *StartViewModel) LastOpenedSummary() (workspace.Summary, bool) {
 	}
 	return workspace.Summary{}, false
 }
+
+func (svm *StartViewModel) Archived() []workspace.Summary {
+	if svm.lastList == nil {
+		return nil
+	}
+	return svm.lastList.Archived
+}
+
+func (svm *StartViewModel) FilteredArchived() []workspace.Summary {
+	all := svm.Archived()
+	q := strings.TrimSpace(strings.ToLower(svm.SearchQuery))
+	if q == "" {
+		return all
+	}
+	out := make([]workspace.Summary, 0, len(all))
+	for _, s := range all {
+		if strings.Contains(strings.ToLower(s.Name), q) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func (svm *StartViewModel) SetArchived(summary workspace.Summary, archived bool) error {
+	paths := workspace.PathsFromRoot(summary.Root)
+	if err := workspace.SetArchived(paths, archived); err != nil {
+		return err
+	}
+	return svm.Refresh()
+}

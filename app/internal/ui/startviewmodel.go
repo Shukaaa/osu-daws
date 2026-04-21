@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"osu-daws-app/internal/workspace"
@@ -13,6 +14,8 @@ type StartViewModel struct {
 	ProjectsRoot      string
 	LastReferencePath string
 	Catalog           *workspace.TemplateCatalog
+
+	SearchQuery string
 
 	create *workspace.CreateService
 	now    func() time.Time
@@ -63,6 +66,24 @@ func (svm *StartViewModel) Workspaces() []workspace.Summary {
 		return nil
 	}
 	return svm.lastList.Workspaces
+}
+
+// FilteredWorkspaces returns Workspaces() filtered by SearchQuery as a
+// case-insensitive substring match against Summary.Name. An empty query
+// returns the full list unchanged.
+func (svm *StartViewModel) FilteredWorkspaces() []workspace.Summary {
+	all := svm.Workspaces()
+	q := strings.TrimSpace(strings.ToLower(svm.SearchQuery))
+	if q == "" {
+		return all
+	}
+	out := make([]workspace.Summary, 0, len(all))
+	for _, s := range all {
+		if strings.Contains(strings.ToLower(s.Name), q) {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // Skipped returns directories that looked like workspaces but could not be loaded.

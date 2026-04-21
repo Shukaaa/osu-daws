@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"osu-daws-app/internal/detect"
@@ -43,11 +44,19 @@ func BuildStartScreen(w fyne.Window, svm *StartViewModel, cb StartScreenCallback
 		rerender()
 	})
 
+	searchEntry := widget.NewEntry()
+	searchEntry.SetPlaceHolder("Search workspaces by name…")
+	searchEntry.SetText(svm.SearchQuery)
+	searchEntry.OnChanged = func(s string) {
+		svm.SearchQuery = s
+		rerender()
+	}
+
 	header := container.NewBorder(
 		nil, nil,
 		sectionTitle("Workspaces"),
 		container.NewHBox(refreshBtn, createBtn),
-		nil,
+		searchEntry,
 	)
 
 	rerender = func() {
@@ -82,12 +91,22 @@ func buildWorkspaceList(
 	svm *StartViewModel,
 	cb StartScreenCallbacks,
 ) fyne.CanvasObject {
-	items := svm.Workspaces()
+	items := svm.FilteredWorkspaces()
+	total := len(svm.Workspaces())
+	filtering := strings.TrimSpace(svm.SearchQuery) != ""
 
 	if len(items) == 0 {
-		empty := widget.NewLabel(
-			"No workspaces yet.\n\nClick “Create New Workspace” to start a new project.",
-		)
+		var msg string
+		switch {
+		case filtering && total > 0:
+			msg = fmt.Sprintf(
+				"No workspaces match %q.\n\nTry a different search term or clear the search.",
+				svm.SearchQuery,
+			)
+		default:
+			msg = "No workspaces yet.\n\nClick “Create New Workspace” to start a new project."
+		}
+		empty := widget.NewLabel(msg)
 		empty.Wrapping = fyne.TextWrapWord
 		empty.Alignment = fyne.TextAlignCenter
 

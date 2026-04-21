@@ -224,3 +224,66 @@ func TestStartVM_CreateWorkspace_FieldErrorsReturned(t *testing.T) {
 		t.Errorf("expected FieldName error, got %v", fe)
 	}
 }
+
+func TestStartVM_FilteredWorkspaces(t *testing.T) {
+	root := t.TempDir()
+	svm := NewStartViewModel(root)
+
+	for _, n := range []string{"Alpha Map", "Beta Song", "Gamma"} {
+		if _, err := createTestWorkspace(svm, n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := svm.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name  string
+		query string
+		want  []string // subset of names expected (order-insensitive)
+	}{
+		{"empty returns all", "", []string{"Alpha Map", "Beta Song", "Gamma"}},
+		{"whitespace returns all", "   ", []string{"Alpha Map", "Beta Song", "Gamma"}},
+		{"substring match", "song", []string{"Beta Song"}},
+		{"case insensitive", "GAMMA", []string{"Gamma"}},
+		{"no match", "zzz", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			svm.SearchQuery = c.query
+			got := svm.FilteredWorkspaces()
+			if len(got) != len(c.want) {
+				t.Fatalf("len=%d want=%d (%v)", len(got), len(c.want), namesOf(got))
+			}
+			for _, wantName := range c.want {
+				found := false
+				for _, g := range got {
+					if g.Name == wantName {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("missing %q in %v", wantName, namesOf(got))
+				}
+			}
+		})
+	}
+}
+
+func TestStartVM_FilteredWorkspaces_BeforeRefresh(t *testing.T) {
+	svm := NewStartViewModel(t.TempDir())
+	svm.SearchQuery = "anything"
+	if got := svm.FilteredWorkspaces(); len(got) != 0 {
+		t.Errorf("expected empty result before Refresh, got %d", len(got))
+	}
+}
+
+func namesOf(ws []workspace.Summary) []string {
+	out := make([]string, len(ws))
+	for i, w := range ws {
+		out[i] = w.Name
+	}
+	return out
+}

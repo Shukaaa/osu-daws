@@ -224,3 +224,280 @@ func TestStartVM_CreateWorkspace_FieldErrorsReturned(t *testing.T) {
 		t.Errorf("expected FieldName error, got %v", fe)
 	}
 }
+
+func TestStartVM_FilteredWorkspaces(t *testing.T) {
+	root := t.TempDir()
+	svm := NewStartViewModel(root)
+
+	for _, n := range []string{"Alpha Map", "Beta Song", "Gamma"} {
+		if _, err := createTestWorkspace(svm, n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := svm.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name  string
+		query string
+		want  []string // subset of names expected (order-insensitive)
+	}{
+		{"empty returns all", "", []string{"Alpha Map", "Beta Song", "Gamma"}},
+		{"whitespace returns all", "   ", []string{"Alpha Map", "Beta Song", "Gamma"}},
+		{"substring match", "song", []string{"Beta Song"}},
+		{"case insensitive", "GAMMA", []string{"Gamma"}},
+		{"no match", "zzz", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			svm.SearchQuery = c.query
+			got := svm.FilteredWorkspaces()
+			if len(got) != len(c.want) {
+				t.Fatalf("len=%d want=%d (%v)", len(got), len(c.want), namesOf(got))
+			}
+			for _, wantName := range c.want {
+				found := false
+				for _, g := range got {
+					if g.Name == wantName {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("missing %q in %v", wantName, namesOf(got))
+				}
+			}
+		})
+	}
+}
+
+func TestStartVM_FilteredWorkspaces_BeforeRefresh(t *testing.T) {
+	svm := NewStartViewModel(t.TempDir())
+	svm.SearchQuery = "anything"
+	if got := svm.FilteredWorkspaces(); len(got) != 0 {
+		t.Errorf("expected empty result before Refresh, got %d", len(got))
+	}
+}
+
+func namesOf(ws []workspace.Summary) []string {
+	out := make([]string, len(ws))
+	for i, w := range ws {
+		out[i] = w.Name
+	}
+	return out
+}
+
+func TestStartVM_ExportImportRoundTrip(t *testing.T) {
+	srcRoot := t.TempDir()
+	dstRoot := t.TempDir()
+	zipPath := filepath.Join(t.TempDir(), "export.zip")
+
+	srcSVM := NewStartViewModel(srcRoot)
+	if _, err := createTestWorkspace(srcSVM, "Round Trip"); err != nil {
+		t.Fatal(err)
+	}
+	if err := srcSVM.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	items := srcSVM.Workspaces()
+	if len(items) != 1 {
+		t.Fatalf("expected 1 workspace, got %d", len(items))
+	}
+
+	if err := srcSVM.ExportWorkspaceToZip(items[0], zipPath); err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	info, err := os.Stat(zipPath)
+	if err != nil || info.Size() == 0 {
+		t.Fatalf("zip file missing or empty: %v", err)
+	}
+
+	// Import into a separate projects root.
+	dstSVM := NewStartViewModel(dstRoot)
+	imported, err := dstSVM.ImportWorkspaceFromZip(zipPath)
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if imported.Project.Name != "Round Trip" {
+		t.Errorf("imported name = %q", imported.Project.Name)
+	}
+	// View model should see the new workspace without an extra Refresh.
+	if len(dstSVM.Workspaces()) != 1 {
+		t.Errorf("expected 1 imported workspace after refresh, got %d",
+			len(dstSVM.Workspaces()))
+	}
+}
+
+func TestStartVM_LastOpened_MarksAndResolves(t *testing.T) {
+	root := t.TempDir()
+	svm := NewStartViewModel(root)
+
+	// No history yet.
+	if _, ok := svm.LastOpenedSummary(); ok {
+		t.Error("fresh VM should not report a last opened workspace")
+	}
+
+	first, err := createTestWorkspace(svm, "First")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := createTestWorkspace(svm, "Second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Mark only the second one.
+	svm.MarkOpened(second)
+	if err := svm.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := svm.LastOpenedSummary()
+	if !ok {
+		t.Fatal("expected a last-opened entry")
+	}
+	if got.ID != second.Project.ID {
+		t.Errorf("last opened = %q, want %q", got.ID, second.Project.ID)
+	}
+	_ = first
+}
+
+func TestStartVM_LastOpened_IgnoresDeletedWorkspace(t *testing.T) {
+	root := t.TempDir()
+	svm := NewStartViewModel(root)
+
+	ws, err := createTestWorkspace(svm, "Doomed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svm.MarkOpened(ws)
+
+	// Nuke the workspace directory, refresh, then query.
+	if err := os.RemoveAll(ws.Paths.Root); err != nil {
+		t.Fatal(err)
+	}
+	if err := svm.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := svm.LastOpenedSummary(); ok {
+		t.Error("last opened must be hidden when target workspace no longer exists")
+	}
+}
+
+func TestStartVM_LastOpened_OnlyOneAtATime(t *testing.T) {
+	root := t.TempDir()
+	svm := NewStartViewModel(root)
+
+	a, _ := createTestWorkspace(svm, "A")
+	b, _ := createTestWorkspace(svm, "B")
+	c, _ := createTestWorkspace(svm, "C")
+
+	svm.MarkOpened(a)
+	svm.MarkOpened(b)
+	svm.MarkOpened(c)
+	_ = svm.Refresh()
+
+	got, ok := svm.LastOpenedSummary()
+	if !ok || got.ID != c.Project.ID {
+		t.Errorf("expected last opened = C (%q), got ok=%v id=%q",
+			c.Project.ID, ok, got.ID)
+	}
+}
+
+func TestStartVM_LastOpened_NilSafe(t *testing.T) {
+	svm := NewStartViewModel(t.TempDir())
+	// Must not panic.
+	svm.MarkOpened(nil)
+	svm.MarkOpened(&workspace.Workspace{})
+}
+
+func TestStartVM_Archive_MovesBetweenLists(t *testing.T) {
+	root := t.TempDir()
+	svm := NewStartViewModel(root)
+
+	a, err := createTestWorkspace(svm, "Keeps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := createTestWorkspace(svm, "Hides")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svm.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	if len(svm.Workspaces()) != 2 || len(svm.Archived()) != 0 {
+		t.Fatalf("setup: active=%d archived=%d",
+			len(svm.Workspaces()), len(svm.Archived()))
+	}
+
+	// Archive b.
+	var bSummary workspace.Summary
+	for _, s := range svm.Workspaces() {
+		if s.ID == b.Project.ID {
+			bSummary = s
+		}
+	}
+	if err := svm.SetArchived(bSummary, true); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	if got := len(svm.Workspaces()); got != 1 || svm.Workspaces()[0].ID != a.Project.ID {
+		t.Errorf("active after archive: %+v", svm.Workspaces())
+	}
+	if got := len(svm.Archived()); got != 1 || svm.Archived()[0].ID != b.Project.ID {
+		t.Errorf("archived after archive: %+v", svm.Archived())
+	}
+
+	// Unarchive b.
+	if err := svm.SetArchived(svm.Archived()[0], false); err != nil {
+		t.Fatalf("unarchive: %v", err)
+	}
+	if len(svm.Workspaces()) != 2 || len(svm.Archived()) != 0 {
+		t.Errorf("after unarchive: active=%d archived=%d",
+			len(svm.Workspaces()), len(svm.Archived()))
+	}
+}
+
+func TestStartVM_Archive_HidesFromLastOpened(t *testing.T) {
+	root := t.TempDir()
+	svm := NewStartViewModel(root)
+
+	ws, err := createTestWorkspace(svm, "Forgotten")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svm.MarkOpened(ws)
+	if _, ok := svm.LastOpenedSummary(); !ok {
+		t.Fatal("precondition: last-opened should resolve")
+	}
+
+	// Archiving the last-opened workspace moves it out of Workspaces()
+	// and thus out of LastOpenedSummary's candidate pool.
+	summary := svm.Workspaces()[0]
+	if err := svm.SetArchived(summary, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := svm.LastOpenedSummary(); ok {
+		t.Error("archived workspace must not surface as last opened")
+	}
+}
+
+func TestStartVM_FilteredArchived(t *testing.T) {
+	root := t.TempDir()
+	svm := NewStartViewModel(root)
+
+	a, _ := createTestWorkspace(svm, "Alpha")
+	b, _ := createTestWorkspace(svm, "Beta Song")
+	_ = svm.SetArchived(workspace.Summary{Root: a.Paths.Root}, true)
+	_ = svm.SetArchived(workspace.Summary{Root: b.Paths.Root}, true)
+
+	svm.SearchQuery = "song"
+	got := svm.FilteredArchived()
+	if len(got) != 1 || got[0].Name != "Beta Song" {
+		t.Errorf("filtered archived = %+v, want only Beta Song", got)
+	}
+	svm.SearchQuery = ""
+	if len(svm.FilteredArchived()) != 2 {
+		t.Errorf("empty query should return all archived, got %d",
+			len(svm.FilteredArchived()))
+	}
+}

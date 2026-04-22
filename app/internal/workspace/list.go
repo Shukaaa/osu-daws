@@ -18,6 +18,7 @@ type Summary struct {
 	ReferenceOsuPath string
 	UpdatedAt        time.Time
 	Root             string
+	Archived         bool
 }
 
 // SkippedEntry describes a directory that looked like a workspace but
@@ -28,10 +29,13 @@ type SkippedEntry struct {
 	Err  error
 }
 
-// ListResult bundles successful summaries and skipped entries. The
-// Workspaces slice is sorted by UpdatedAt desc, then Name asc, then ID asc.
+// ListResult bundles successful summaries and skipped entries.
+// Workspaces contains only non-archived entries; Archived is populated
+// with the rest so callers can render them in a separate section.
+// Both slices share the same sort order: UpdatedAt desc, Name asc, ID asc.
 type ListResult struct {
 	Workspaces []Summary
+	Archived   []Summary
 	Skipped    []SkippedEntry
 }
 
@@ -70,17 +74,24 @@ func ListWorkspaces(projectsRoot string) (*ListResult, error) {
 			continue
 		}
 
-		result.Workspaces = append(result.Workspaces, Summary{
+		s := Summary{
 			ID:               pf.ID,
 			Name:             pf.Name,
 			DAW:              pf.Template.DAW,
 			ReferenceOsuPath: pf.ReferenceOsuPath,
 			UpdatedAt:        pf.UpdatedAt,
 			Root:             root,
-		})
+			Archived:         pf.Archived,
+		}
+		if pf.Archived {
+			result.Archived = append(result.Archived, s)
+		} else {
+			result.Workspaces = append(result.Workspaces, s)
+		}
 	}
 
 	sortSummaries(result.Workspaces)
+	sortSummaries(result.Archived)
 	sort.SliceStable(result.Skipped, func(i, j int) bool {
 		return result.Skipped[i].Path < result.Skipped[j].Path
 	})

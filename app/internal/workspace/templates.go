@@ -23,39 +23,27 @@ func (t TemplateDescriptor) AsRef() TemplateRef {
 	return TemplateRef{DAW: t.DAW, ID: t.ID, Version: t.Version}
 }
 
-// TemplateProvider is the extension point for a DAW/template. A
-// provider knows its own metadata (via Descriptor) and performs the
-// DAW-specific initialization of a freshly scaffolded workspace (via
-// Initialize). Initialize is called after CreateWorkspace has made the
-// directory layout, so <paths.Template>/ already exists and is empty
-// on first run.
-//
-// Implementations should be pure w.r.t. Descriptor() — same values on
-// every call — and idempotent w.r.t. Initialize where possible (safe
-// to re-run on an existing workspace).
 type TemplateProvider interface {
-	// Descriptor returns the catalog entry describing this template.
 	Descriptor() TemplateDescriptor
-	// Initialize performs DAW-specific setup inside the workspace. The
-	// supplied Paths are already scaffolded.
 	Initialize(paths Paths) error
 }
 
+type TemplateMigrator interface {
+	Migrate(paths Paths, fromVersion string) error
+}
+
+var registeredProviders []TemplateProvider
+
+func RegisterProvider(p TemplateProvider) {
+	registeredProviders = append(registeredProviders, p)
+}
+
 // TemplateCatalog is a read-only registry of available templates.
-// Internally it stores TemplateProviders; callers can retrieve just
-// the descriptor metadata via List/ByID/Default, and look up the live
-// provider via ProviderByID / DefaultProvider.
-//
-// The catalog is intentionally tiny today: only the FL Studio hitsound
-// template is shipped. The shape is ready for more DAWs to slot in
-// later without changing the UI layer.
 type TemplateCatalog struct {
 	providers []TemplateProvider
 }
 
 // NewTemplateCatalog builds a catalog from the given providers. It
-// panics on duplicate template IDs, which is a programmer error. Tests
-// use this constructor to inject spy providers.
 func NewTemplateCatalog(providers ...TemplateProvider) *TemplateCatalog {
 	seen := map[string]struct{}{}
 	for _, p := range providers {
@@ -68,11 +56,9 @@ func NewTemplateCatalog(providers ...TemplateProvider) *TemplateCatalog {
 	return &TemplateCatalog{providers: providers}
 }
 
-// NewDefaultCatalog returns the catalog shipped with the current build.
+// NewDefaultCatalog returns the catalog shipped with the current
 func NewDefaultCatalog() *TemplateCatalog {
-	return NewTemplateCatalog(
-		FLStudioProvider{},
-	)
+	return NewTemplateCatalog(registeredProviders...)
 }
 
 // List returns all catalog entries in a stable order.
@@ -93,14 +79,11 @@ func (c *TemplateCatalog) ByID(id string) (TemplateDescriptor, bool) {
 }
 
 // Default returns the first catalog entry. Used as the default UI
-// selection. Panics only if the catalog is empty, which is a
-// programmer error for a shipped build.
 func (c *TemplateCatalog) Default() TemplateDescriptor {
 	return c.DefaultProvider().Descriptor()
 }
 
 // ProviderByID looks up the live provider with the given catalog ID.
-// Returns (nil, false) when the ID is unknown.
 func (c *TemplateCatalog) ProviderByID(id string) (TemplateProvider, bool) {
 	for _, p := range c.providers {
 		if p.Descriptor().ID == id {
@@ -111,8 +94,6 @@ func (c *TemplateCatalog) ProviderByID(id string) (TemplateProvider, bool) {
 }
 
 // DefaultProvider returns the first registered provider. Panics when
-// the catalog is empty, which is a programmer error for a shipped
-// build.
 func (c *TemplateCatalog) DefaultProvider() TemplateProvider {
 	if len(c.providers) == 0 {
 		panic("workspace: TemplateCatalog is empty")

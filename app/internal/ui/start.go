@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"osu-daws-app/internal/detect"
@@ -26,6 +27,20 @@ type StartScreenCallbacks struct {
 // BuildStartScreen constructs the workspace overview. The caller owns the
 // window and must attach the returned object via SetContent.
 func BuildStartScreen(w fyne.Window, svm *StartViewModel, cb StartScreenCallbacks) fyne.CanvasObject {
+	origOpen, origCreate := cb.OnOpen, cb.OnCreate
+	cb.OnOpen = func(ws *workspace.Workspace) {
+		svm.MarkOpened(ws)
+		if origOpen != nil {
+			origOpen(ws)
+		}
+	}
+	cb.OnCreate = func(ws *workspace.Workspace) {
+		svm.MarkOpened(ws)
+		if origCreate != nil {
+			origCreate(ws)
+		}
+	}
+
 	content := container.NewStack()
 
 	var rerender func()
@@ -43,15 +58,27 @@ func BuildStartScreen(w fyne.Window, svm *StartViewModel, cb StartScreenCallback
 		rerender()
 	})
 
+	importBtn := widget.NewButton("Import…", func() {
+		showImportWorkspaceDialog(w, svm, cb, rerender)
+	})
+
+	searchEntry := widget.NewEntry()
+	searchEntry.SetPlaceHolder("Search workspaces by name…")
+	searchEntry.SetText(svm.SearchQuery)
+	searchEntry.OnChanged = func(s string) {
+		svm.SearchQuery = s
+		rerender()
+	}
+
 	header := container.NewBorder(
 		nil, nil,
 		sectionTitle("Workspaces"),
-		container.NewHBox(refreshBtn, createBtn),
-		nil,
+		container.NewHBox(refreshBtn, importBtn, createBtn),
+		searchEntry,
 	)
 
 	rerender = func() {
-		body := buildWorkspaceList(w, svm, cb)
+		body := buildWorkspaceList(w, svm, cb, rerender)
 		content.Objects = []fyne.CanvasObject{
 			container.NewBorder(
 				container.NewVBox(
@@ -75,58 +102,211 @@ func BuildStartScreen(w fyne.Window, svm *StartViewModel, cb StartScreenCallback
 	return content
 }
 
-// buildWorkspaceList renders the current workspace list (or an empty
-// state) plus a warning banner for skipped entries.
+// buildWorkspaceList renders the active workspace list (or an empty
+// state) plus — when present — a "Last opened" shortcut above and an
+// "Archived" accordion below. rerender is threaded through so per-row
+// archive toggles can refresh the screen.
 func buildWorkspaceList(
 	w fyne.Window,
 	svm *StartViewModel,
 	cb StartScreenCallbacks,
+	rerender func(),
 ) fyne.CanvasObject {
-	items := svm.Workspaces()
+	activeItems := svm.FilteredWorkspaces()
+	totalActive := len(svm.Workspaces())
+	totalArchived := len(svm.Archived())
+	filtering := strings.TrimSpace(svm.SearchQuery) != ""
 
-	if len(items) == 0 {
-		empty := widget.NewLabel(
-			"No workspaces yet.\n\nClick “Create New Workspace” to start a new project.",
-		)
-		empty.Wrapping = fyne.TextWrapWord
-		empty.Alignment = fyne.TextAlignCenter
-
-		children := []fyne.CanvasObject{empty}
-		if banner := maybeSkippedBanner(svm.Skipped()); banner != nil {
-			children = append(children, banner)
+	// --- center: active list or empty state -----------------------------
+	var center fyne.CanvasObject
+	if len(activeItems) == 0 {
+		center = container.NewCenter(container.NewVBox(
+			emptyStateLabel(svm.SearchQuery, filtering, totalActive, totalArchived),
+		))
+	} else {
+		rows := container.NewVBox()
+		for i := range activeItems {
+			item := activeItems[i]
+			rows.Add(workspaceRow(item,
+				func() { openSummary(w, cb, item) },
+				func() { showExportWorkspaceDialog(w, svm, item) },
+				func() { archiveSummary(w, svm, item, true, rerender) },
+			))
+			rows.Add(vSpace(4))
 		}
-		return container.NewCenter(container.NewVBox(children...))
+		center = container.NewVScroll(rows)
 	}
 
-	rows := container.NewVBox()
-	for i := range items {
-		item := items[i]
-		rows.Add(workspaceRow(item, func() {
-			ws, err := workspace.LoadWorkspace(item.Root)
-			if err != nil {
-				dialog.ShowError(err, w)
-				return
-			}
-			if cb.OnOpen != nil {
-				cb.OnOpen(ws)
-			}
-		}))
-		rows.Add(vSpace(4))
+	// --- top: last-opened shortcut + skipped banner --------------------
+	var top fyne.CanvasObject
+	if !filtering {
+		if last, ok := svm.LastOpenedSummary(); ok {
+			top = buildLastOpenedSection(w, cb, last)
+		}
 	}
-
-	body := container.NewVScroll(rows)
 	if banner := maybeSkippedBanner(svm.Skipped()); banner != nil {
-		return container.NewBorder(banner, nil, nil, nil, body)
+		top = stackIfBoth(top, banner)
 	}
-	return body
+
+	// --- bottom: archived accordion ------------------------------------
+	var bottom fyne.CanvasObject
+	if totalArchived > 0 {
+		bottom = buildArchivedSection(
+			w, svm, cb, svm.FilteredArchived(), totalArchived, filtering, rerender)
+	}
+
+	return container.NewBorder(top, bottom, nil, nil, center)
 }
 
-func workspaceRow(s workspace.Summary, onOpen func()) fyne.CanvasObject {
+// emptyStateLabel picks the right "nothing to show" message based on
+// whether the user is filtering and whether archived workspaces exist
+// that could explain the empty active list.
+func emptyStateLabel(query string, filtering bool, totalActive, totalArchived int) *widget.Label {
+	var msg string
+	switch {
+	case filtering && totalActive+totalArchived > 0:
+		msg = fmt.Sprintf(
+			"No workspaces match %q.\n\nTry a different search term or clear the search.",
+			query,
+		)
+	case totalActive == 0 && totalArchived > 0:
+		msg = "No active workspaces.\n\nAll your workspaces are currently archived. " +
+			"Expand “Archived” below to restore one, or create a new workspace."
+	default:
+		msg = "No workspaces yet.\n\nClick “Create New Workspace” to start a new project."
+	}
+	lbl := widget.NewLabel(msg)
+	lbl.Wrapping = fyne.TextWrapWord
+	lbl.Alignment = fyne.TextAlignCenter
+	return lbl
+}
+
+// buildArchivedSection renders a collapsed accordion titled
+// "Archived (N)" (or "Archived (m of N)" while filtering). Expanding it
+// reveals archived workspace cards with Unarchive actions.
+func buildArchivedSection(
+	w fyne.Window,
+	svm *StartViewModel,
+	cb StartScreenCallbacks,
+	items []workspace.Summary,
+	totalArchived int,
+	filtering bool,
+	rerender func(),
+) fyne.CanvasObject {
+	var content fyne.CanvasObject
+	if len(items) == 0 {
+		lbl := widget.NewLabel(fmt.Sprintf(
+			"No archived workspaces match %q.", svm.SearchQuery))
+		lbl.Wrapping = fyne.TextWrapWord
+		lbl.Alignment = fyne.TextAlignCenter
+		content = container.NewPadded(lbl)
+	} else {
+		rows := container.NewVBox()
+		for i := range items {
+			item := items[i]
+			rows.Add(workspaceRow(item,
+				func() { openSummary(w, cb, item) },
+				func() { showExportWorkspaceDialog(w, svm, item) },
+				func() { archiveSummary(w, svm, item, false, rerender) },
+			))
+			rows.Add(vSpace(4))
+		}
+		content = rows
+	}
+
+	title := fmt.Sprintf("Archived (%d)", totalArchived)
+	if filtering {
+		title = fmt.Sprintf("Archived (%d of %d)", len(items), totalArchived)
+	}
+	acc := widget.NewAccordion(widget.NewAccordionItem(title, content))
+	return container.NewPadded(acc)
+}
+
+// stackIfBoth vertically concatenates two optional objects. Returns
+// nil when both are nil, the surviving object when exactly one is nil,
+// and a VBox otherwise.
+func stackIfBoth(a, b fyne.CanvasObject) fyne.CanvasObject {
+	switch {
+	case a == nil && b == nil:
+		return nil
+	case a == nil:
+		return b
+	case b == nil:
+		return a
+	default:
+		return container.NewVBox(a, b)
+	}
+}
+
+// openSummary resolves a Summary to a Workspace and hands it to OnOpen.
+func openSummary(w fyne.Window, cb StartScreenCallbacks, s workspace.Summary) {
+	ws, err := workspace.LoadWorkspace(s.Root)
+	if err != nil {
+		dialog.ShowError(err, w)
+		return
+	}
+	if cb.OnOpen != nil {
+		cb.OnOpen(ws)
+	}
+}
+
+// archiveSummary flips the archived flag and rerenders so the workspace
+// moves between the active list and the archived accordion without the
+// user needing to refresh manually.
+func archiveSummary(
+	w fyne.Window,
+	svm *StartViewModel,
+	s workspace.Summary,
+	archived bool,
+	rerender func(),
+) {
+	if err := svm.SetArchived(s, archived); err != nil {
+		dialog.ShowError(err, w)
+		return
+	}
+	rerender()
+}
+
+func buildLastOpenedSection(
+	w fyne.Window,
+	cb StartScreenCallbacks,
+	s workspace.Summary,
+) fyne.CanvasObject {
+	openBtn := widget.NewButton("Open", func() {
+		ws, err := workspace.LoadWorkspace(s.Root)
+		if err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
+		if cb.OnOpen != nil {
+			cb.OnOpen(ws)
+		}
+	})
+	openBtn.Importance = widget.HighImportance
+
+	meta := widget.NewLabel(formatMeta(s))
+	meta.TextStyle = fyne.TextStyle{Italic: true}
+	meta.Wrapping = fyne.TextWrapWord
+
+	body := container.NewBorder(nil, nil, nil, openBtn, meta)
+	card := widget.NewCard("Last opened", displayName(s.Name), body)
+	return container.NewPadded(card)
+}
+
+func workspaceRow(s workspace.Summary, onOpen, onExport, onArchiveToggle func()) fyne.CanvasObject {
 	name := widget.NewLabel(displayName(s.Name))
 	name.TextStyle = fyne.TextStyle{Bold: true}
 
 	openBtn := widget.NewButton("Open", onOpen)
 	openBtn.Importance = widget.HighImportance
+
+	exportBtn := widget.NewButton("Export…", onExport)
+
+	archiveLabel := "Archive"
+	if s.Archived {
+		archiveLabel = "Unarchive"
+	}
+	archiveBtn := widget.NewButton(archiveLabel, onArchiveToggle)
 
 	meta := widget.NewLabel(formatMeta(s))
 	meta.TextStyle = fyne.TextStyle{Italic: true}
@@ -136,8 +316,10 @@ func workspaceRow(s workspace.Summary, onOpen func()) fyne.CanvasObject {
 	path.TextStyle = fyne.TextStyle{Italic: true}
 	path.Wrapping = fyne.TextWrapWord
 
+	actions := container.NewHBox(archiveBtn, exportBtn, openBtn)
+
 	body := container.NewVBox(
-		container.NewBorder(nil, nil, nil, openBtn, name),
+		container.NewBorder(nil, nil, nil, actions, name),
 		path,
 		meta,
 	)
@@ -357,4 +539,86 @@ func formatCreateError(err error) string {
 		return string(b)
 	}
 	return err.Error()
+}
+
+// showExportWorkspaceDialog prompts the user for a destination .zip
+// and exports the selected workspace there. Uses Fyne's file save
+// dialog; the view model owns the actual zip write.
+func showExportWorkspaceDialog(
+	w fyne.Window,
+	svm *StartViewModel,
+	item workspace.Summary,
+) {
+	fd := dialog.NewFileSave(func(wc fyne.URIWriteCloser, err error) {
+		if err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
+		if wc == nil {
+			return // user cancelled
+		}
+		// We need the target path; Fyne's URIWriteCloser exposes it
+		// via URI().Path(). Close the handle first so we own the file.
+		target := wc.URI().Path()
+		_ = wc.Close()
+
+		if !strings.EqualFold(filepath.Ext(target), workspace.ArchiveFileExtension) {
+			target += workspace.ArchiveFileExtension
+		}
+		if err := svm.ExportWorkspaceToZip(item, target); err != nil {
+			dialog.ShowError(fmt.Errorf("export failed: %w", err), w)
+			return
+		}
+		dialog.ShowInformation(
+			"Workspace exported",
+			"Saved to:\n"+target,
+			w,
+		)
+	}, w)
+
+	// Suggest a friendly filename derived from the workspace name.
+	fd.SetFileName(workspace.SuggestExportFileName(&workspace.Workspace{
+		Project: &workspace.ProjectFile{Name: item.Name},
+	}))
+	fd.SetFilter(storage.NewExtensionFileFilter([]string{workspace.ArchiveFileExtension}))
+	fd.Show()
+}
+
+// showImportWorkspaceDialog prompts the user for a .zip archive and
+// imports it under a fresh workspace ID. On success the list refreshes;
+// the callback opens the newly imported workspace if OnCreate is wired.
+func showImportWorkspaceDialog(
+	w fyne.Window,
+	svm *StartViewModel,
+	cb StartScreenCallbacks,
+	rerender func(),
+) {
+	fd := dialog.NewFileOpen(func(rc fyne.URIReadCloser, err error) {
+		if err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
+		if rc == nil {
+			return // user cancelled
+		}
+		src := rc.URI().Path()
+		_ = rc.Close()
+
+		ws, err := svm.ImportWorkspaceFromZip(src)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("import failed: %w", err), w)
+			return
+		}
+		rerender()
+		dialog.ShowInformation(
+			"Workspace imported",
+			fmt.Sprintf("%q was imported successfully.", ws.Project.Name),
+			w,
+		)
+		if cb.OnCreate != nil {
+			cb.OnCreate(ws)
+		}
+	}, w)
+	fd.SetFilter(storage.NewExtensionFileFilter([]string{workspace.ArchiveFileExtension}))
+	fd.Show()
 }

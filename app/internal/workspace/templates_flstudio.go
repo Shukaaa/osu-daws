@@ -2,19 +2,13 @@ package workspace
 
 import (
 	"embed"
-	"encoding/json"
-	"io/fs"
 	"os"
-	"path/filepath"
-	"strings"
-	"time"
 )
 
 // FLStudioTemplateID is the catalog ID of the FL Studio hitsound template.
 const FLStudioTemplateID = "osu!daw hitsound template"
 
 // FLStudioTemplateVersion tracks the on-disk layout of the FL Studio
-// template. Bump alongside changes to the shipped .flp / sample pack.
 const FLStudioTemplateVersion = "1"
 
 const (
@@ -33,8 +27,13 @@ const (
 //go:embed flstudio_assets
 var flStudioAssets embed.FS
 
-// FLStudioProvider copies the embedded FL Studio template into the
-// workspace's template/ directory and writes a template_info.json marker.
+// FLStudioExtra is the FL-specific payload stored inside
+type FLStudioExtra struct {
+	RootDir   string `json:"root_dir"`
+	EntryFile string `json:"entry_file"`
+}
+
+// FLStudioProvider materializes the embedded FL Studio template into a
 type FLStudioProvider struct{}
 
 func (FLStudioProvider) Descriptor() TemplateDescriptor {
@@ -47,86 +46,25 @@ func (FLStudioProvider) Descriptor() TemplateDescriptor {
 	}
 }
 
-const templateInfoFileName = "template_info.json"
-
-// TemplateInfo is the JSON marker written inside a workspace's template/
-// folder after a provider has initialized it. Future migrations inspect
-// this file to decide whether to re-run or upgrade assets.
-type TemplateInfo struct {
-	TemplateID string  `json:"template_id"`
-	DAW        DAWType `json:"daw"`
-	Version    string  `json:"version"`
-
-	RootDir   string `json:"root_dir,omitempty"`
-	EntryFile string `json:"entry_file,omitempty"`
-
-	InitializedAt time.Time `json:"initialized_at"`
-}
-
-// nowTemplate is the clock used by Initialize. Tests may override it.
-var nowTemplate = func() time.Time { return time.Now().UTC() }
-
-// Initialize materializes the embedded FL Studio template inside
-// paths.Template and writes the marker file. Idempotent: re-running
-// refreshes asset contents and the marker and leaves unrelated files
-// (user work under different names) untouched.
+// Initialize copies the embedded asset tree into paths.Template and
+// writes the generic template marker with an FLStudioExtra payload.
 func (p FLStudioProvider) Initialize(paths Paths) error {
 	if err := os.MkdirAll(paths.Template, 0o755); err != nil {
 		return &Error{Code: ErrIO,
 			Message: "cannot create template directory: " + paths.Template, Cause: err}
 	}
-
-	if err := copyEmbedTree(flStudioAssets, flStudioAssetsRoot, paths.Template); err != nil {
+	if err := CopyEmbedTree(flStudioAssets, flStudioAssetsRoot, paths.Template); err != nil {
 		return &Error{Code: ErrIO,
 			Message: "cannot copy FL Studio template assets", Cause: err}
 	}
-
-	desc := p.Descriptor()
-	info := TemplateInfo{
-		TemplateID:    desc.ID,
-		DAW:           desc.DAW,
-		Version:       desc.Version,
-		RootDir:       FLStudioRootDir,
-		EntryFile:     FLStudioEntryFile,
-		InitializedAt: nowTemplate(),
-	}
-	data, err := json.MarshalIndent(info, "", "  ")
-	if err != nil {
-		return &Error{Code: ErrIO,
-			Message: "cannot marshal template info", Cause: err}
-	}
-	target := filepath.Join(paths.Template, templateInfoFileName)
-	if err := os.WriteFile(target, data, 0o644); err != nil {
-		return &Error{Code: ErrIO,
-			Message: "cannot write template marker: " + target, Cause: err}
-	}
-	return nil
-}
-
-// copyEmbedTree walks src inside efs and mirrors its contents into dst.
-// Existing files are overwritten. embed.FS uses forward slashes and they
-// are translated to the host separator.
-func copyEmbedTree(efs embed.FS, src, dst string) error {
-	return fs.WalkDir(efs, src, func(p string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		rel := strings.TrimPrefix(p, src)
-		rel = strings.TrimPrefix(rel, "/")
-		if rel == "" {
-			return nil
-		}
-		target := filepath.Join(dst, filepath.FromSlash(rel))
-		if d.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		data, err := efs.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(target, data, 0o644)
+	return WriteTemplateMarker(paths, p.Descriptor(), FLStudioExtra{
+		RootDir:   FLStudioRootDir,
+		EntryFile: FLStudioEntryFile,
 	})
 }
+
+// Self-register the provider so NewDefaultCatalog picks it up without
+// edits to templates.go. Adding a new DAW is therefore a single-file
+// change: drop a templates_<daw>.go alongside this one, implement
+// TemplateProvider, call RegisterProvider from init().
+func init() { RegisterProvider(FLStudioProvider{}) }

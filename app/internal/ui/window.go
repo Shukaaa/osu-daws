@@ -226,6 +226,11 @@ func buildAndShow(w fyne.Window, vm *ViewModel, backToStart func()) {
 		output.SetText(res.OsuContent)
 		copyToOsuBtn.Enable()
 
+		fyne.CurrentApp().SendNotification(&fyne.Notification{
+			Title:   "osu!daws",
+			Content: "Hitsound diff generated successfully!",
+		})
+
 		if vm.WorkspaceExportsDir() != "" {
 			path, saveErr := vm.SaveToExports(res)
 			if saveErr != nil {

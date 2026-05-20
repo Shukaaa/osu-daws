@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -45,7 +46,28 @@ type ViewModel struct {
 	ReferencePath    string
 	DefaultSampleset domain.Sampleset
 
+	// VolumeStep is the rounding step (in volume %) applied to all source
+	// events before generation. 0 disables rounding.
+	VolumeStep int
+
+	// VersioningEnabled toggles automatic v1, v2, ... export versioning.
+	// When true:
+	//   - Generate() injects " v<N>" into the diff name / Metadata.Version.
+	//   - SaveToExports() writes to a versioned filename and bumps the counter.
+	//   - CopyToOsuProject() copies using the same versioned filename.
+	VersioningEnabled bool
+
 	workspaceExportsDir string
+
+	// lastExportVersion mirrors ws.Project.LastExportVersion (0 when unset).
+	lastExportVersion int
+	// pendingVersion is the version that the currently generated content
+	// uses. It equals lastExportVersion+1 while a generation is pending a
+	// save, and is promoted to lastExportVersion on a successful save.
+	pendingVersion int
+	// lastSavedExportPath is the absolute path written by the most recent
+	// successful SaveToExports call (may be "" when nothing has been saved).
+	lastSavedExportPath string
 
 	clipboard ClipboardReader
 	opener    FileOpener
@@ -81,6 +103,98 @@ func (vm *ViewModel) WorkspaceExportsDir() string {
 	return vm.workspaceExportsDir
 }
 
+// SetLastExportVersion seeds the counter used for automatic versioning
+// (typically loaded from the active workspace's project.odaw).
+func (vm *ViewModel) SetLastExportVersion(v int) {
+	if v < 0 {
+		v = 0
+	}
+	vm.lastExportVersion = v
+	vm.pendingVersion = 0
+}
+
+// LastExportVersion returns the highest version written to exports/.
+func (vm *ViewModel) LastExportVersion() int { return vm.lastExportVersion }
+
+// LastSavedExportPath returns the most recent workspace export path, or "".
+func (vm *ViewModel) LastSavedExportPath() string { return vm.lastSavedExportPath }
+
+func (vm *ViewModel) LatestExportedDiffPath() (string, error) {
+	if vm.lastSavedExportPath != "" {
+		if info, err := os.Stat(vm.lastSavedExportPath); err == nil && !info.IsDir() {
+			return vm.lastSavedExportPath, nil
+		}
+	}
+	if vm.workspaceExportsDir == "" {
+		return "", fmt.Errorf("no active workspace exports folder")
+	}
+	entries, err := os.ReadDir(vm.workspaceExportsDir)
+	if err != nil {
+		return "", fmt.Errorf("cannot read workspace exports folder: %w", err)
+	}
+
+	type candidate struct {
+		path string
+		mod  int64
+	}
+	var candidates []candidate
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".osu") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		candidates = append(candidates, candidate{
+			path: filepath.Join(vm.workspaceExportsDir, entry.Name()),
+			mod:  info.ModTime().UnixNano(),
+		})
+	}
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("no generated hitsound diff found in workspace exports. Please Generate first")
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].mod == candidates[j].mod {
+			return candidates[i].path > candidates[j].path
+		}
+		return candidates[i].mod > candidates[j].mod
+	})
+	return candidates[0].path, nil
+}
+
+func (vm *ViewModel) DefaultHSDiffZipPath() (string, error) {
+	diffPath, err := vm.LatestExportedDiffPath()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(diffPath, filepath.Ext(diffPath)) + ".zip", nil
+}
+
+func (vm *ViewModel) ExportHSDiffZip(destZip string) (*exporter.HitsoundZipResult, error) {
+	diffPath, err := vm.LatestExportedDiffPath()
+	if err != nil {
+		return nil, err
+	}
+	beatmapDir := vm.DefaultSaveDir()
+	if beatmapDir == "" {
+		return nil, fmt.Errorf("cannot determine osu! beatmap folder from reference path")
+	}
+	return exporter.CreateHitsoundZip(destZip, diffPath, beatmapDir)
+}
+
+// effectiveVersion is the version number used for filenames and diff
+// name injection. 0 means "no version suffix".
+func (vm *ViewModel) effectiveVersion() int {
+	if !vm.VersioningEnabled {
+		return 0
+	}
+	if vm.pendingVersion > 0 {
+		return vm.pendingVersion
+	}
+	return vm.lastExportVersion + 1
+}
+
 // SaveToExports writes res.OsuContent to the active workspace's exports/
 // folder using the canonical osu-style filename derived from the reference
 // map metadata. Returns the absolute path written to.
@@ -94,10 +208,16 @@ func (vm *ViewModel) SaveToExports(res *pipeline.Result) (string, error) {
 	if err := os.MkdirAll(vm.workspaceExportsDir, 0o755); err != nil {
 		return "", fmt.Errorf("cannot create exports directory: %w", err)
 	}
-	path := exporter.DefaultExportPath(vm.workspaceExportsDir, res.Reference)
+	version := vm.effectiveVersion()
+	path := exporter.DefaultExportPathVersioned(vm.workspaceExportsDir, res.Reference, version)
 	if err := os.WriteFile(path, []byte(res.OsuContent), 0o644); err != nil {
 		return "", fmt.Errorf("cannot write export: %w", err)
 	}
+	if version > 0 {
+		vm.lastExportVersion = version
+		vm.pendingVersion = 0
+	}
+	vm.lastSavedExportPath = path
 	return path, nil
 }
 
@@ -109,7 +229,14 @@ func (vm *ViewModel) CopyToOsuProject(res *pipeline.Result) (string, error) {
 	if res == nil || res.OsuContent == "" {
 		return "", fmt.Errorf("no generated content to export")
 	}
-	path := exporter.DefaultExportPath(dir, res.Reference)
+	version := 0
+	if vm.VersioningEnabled {
+		version = vm.lastExportVersion
+		if version == 0 {
+			version = vm.effectiveVersion()
+		}
+	}
+	path := exporter.DefaultExportPathVersioned(dir, res.Reference, version)
 	if err := os.WriteFile(path, []byte(res.OsuContent), 0o644); err != nil {
 		return "", fmt.Errorf("cannot write to osu! project: %w", err)
 	}
@@ -250,6 +377,13 @@ func (vm *ViewModel) Generate() (*pipeline.Result, error) {
 		ReferenceOsu:     rc,
 		DefaultSampleset: vm.DefaultSampleset,
 		ExportOptions:    exporter.Options{},
+		VolumeFormatter:  domain.VolumeFormatter{Step: vm.VolumeStep},
+	}
+	if vm.VersioningEnabled {
+		vm.pendingVersion = vm.lastExportVersion + 1
+		req.ExportOptions.Version = vm.pendingVersion
+	} else {
+		vm.pendingVersion = 0
 	}
 	res, pErr := pipeline.Generate(req)
 	if pErr != nil {

@@ -210,6 +210,48 @@ func buildAndShow(w fyne.Window, vm *ViewModel, backToStart func()) {
 	})
 	copyToOsuBtn.Disable()
 
+	exportZipBtn := widget.NewButton("Export HS Diff as zip", func() {
+		defaultPath, err := vm.DefaultHSDiffZipPath()
+		if err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
+
+		fd := dialog.NewFileSave(func(wc fyne.URIWriteCloser, err error) {
+			if err != nil {
+				dialog.ShowError(err, w)
+				return
+			}
+			if wc == nil {
+				return
+			}
+			path := wc.URI().Path()
+			_ = wc.Close()
+			if path == "" {
+				dialog.ShowError(fmt.Errorf("zip destination path is empty"), w)
+				return
+			}
+
+			res, err := vm.ExportHSDiffZip(path)
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("could not export HS diff zip:\n%w", err), w)
+				return
+			}
+			dialog.ShowInformation("Success",
+				fmt.Sprintf("Created zip:\n%s\n\nIncluded %d hitsound files.", res.ZipPath, len(res.HitsoundFiles)), w)
+		}, w)
+		fd.SetFileName(filepath.Base(defaultPath))
+		fd.SetFilter(storage.NewExtensionFileFilter([]string{".zip"}))
+		if loc, err := storage.ListerForURI(storage.NewFileURI(filepath.Dir(defaultPath))); err == nil {
+			fd.SetLocation(loc)
+		}
+		fd.Show()
+	})
+	exportZipBtn.Disable()
+	if _, err := vm.LatestExportedDiffPath(); err == nil {
+		exportZipBtn.Enable()
+	}
+
 	generateBtn := widget.NewButton("Generate", func() {
 		res, err := vm.Generate()
 		if err != nil {
@@ -218,6 +260,7 @@ func buildAndShow(w fyne.Window, vm *ViewModel, backToStart func()) {
 			lastResult = nil
 			exportStatus.Hide()
 			copyToOsuBtn.Disable()
+			exportZipBtn.Disable()
 			dialog.ShowError(err, w)
 			return
 		}
@@ -235,12 +278,15 @@ func buildAndShow(w fyne.Window, vm *ViewModel, backToStart func()) {
 			path, saveErr := vm.SaveToExports(res)
 			if saveErr != nil {
 				exportStatus.SetText("⚠ Could not auto-save to workspace: " + saveErr.Error())
+				exportZipBtn.Disable()
 			} else {
 				exportStatus.SetText("✓ Saved to: " + path)
+				exportZipBtn.Enable()
 			}
 			exportStatus.Show()
 		} else {
 			exportStatus.Hide()
+			exportZipBtn.Disable()
 		}
 
 		if activeWorkspace != nil {
@@ -368,11 +414,52 @@ func buildAndShow(w fyne.Window, vm *ViewModel, backToStart func()) {
 	samplesetLabel.TextStyle = fyne.TextStyle{Bold: true}
 	samplesetRow := container.NewBorder(nil, nil, samplesetLabel, nil, defaultSelect)
 
+	versioningCheck := widget.NewCheck("Version exports (v1, v2, …)", func(checked bool) {
+		vm.VersioningEnabled = checked
+		if activeWorkspace != nil {
+			_ = PersistToWorkspace(vm, activeWorkspace)
+		}
+	})
+	versioningCheck.SetChecked(vm.VersioningEnabled)
+	versioningHint := widget.NewLabel("Each successful export bumps the version and adds it to the diff name and filename.")
+	versioningHint.Wrapping = fyne.TextWrapWord
+	versioningHint.TextStyle = fyne.TextStyle{Italic: true}
+
+	volumeOptions := []string{"Off", "1%", "2%", "5%", "10%", "25%"}
+	volumeSteps := map[string]int{"Off": 0, "1%": 1, "2%": 2, "5%": 5, "10%": 10, "25%": 25}
+	volumeLabelFor := func(step int) string {
+		for _, opt := range volumeOptions {
+			if volumeSteps[opt] == step {
+				return opt
+			}
+		}
+		return "Off"
+	}
+	volumeSelect := widget.NewSelect(volumeOptions, func(s string) {
+		vm.VolumeStep = volumeSteps[s]
+		if activeWorkspace != nil {
+			_ = PersistToWorkspace(vm, activeWorkspace)
+		}
+	})
+	volumeSelect.SetSelected(volumeLabelFor(vm.VolumeStep))
+	volumeLabel := widget.NewLabel("Volume rounding")
+	volumeLabel.TextStyle = fyne.TextStyle{Bold: true}
+	volumeRow := container.NewBorder(nil, nil, volumeLabel, nil, volumeSelect)
+	volumeHint := widget.NewLabel("Snaps every event volume to the chosen step (e.g. 94% → 95%, 82% → 80%) to fix small DAW imprecisions.")
+	volumeHint.Wrapping = fyne.TextWrapWord
+	volumeHint.TextStyle = fyne.TextStyle{Italic: true}
+
 	bottomSection := section(
 		"3. Generate",
 		"Choose the base sampleset, then generate. The result is saved into the workspace's exports/ folder automatically.",
 		container.NewVBox(
 			samplesetRow,
+			vSpace(4),
+			volumeRow,
+			volumeHint,
+			vSpace(4),
+			versioningCheck,
+			versioningHint,
 			vSpace(6),
 			container.NewHBox(generateBtn),
 		),
@@ -473,7 +560,7 @@ func buildAndShow(w fyne.Window, vm *ViewModel, backToStart func()) {
 		"Preview", "",
 		container.NewBorder(
 			container.NewVBox(
-				container.NewHBox(copyToOsuBtn),
+				container.NewHBox(copyToOsuBtn, exportZipBtn),
 				exportStatus,
 			),
 			nil, nil, nil,

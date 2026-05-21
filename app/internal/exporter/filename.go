@@ -1,6 +1,7 @@
 package exporter
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -16,6 +17,11 @@ const invalidChars = `<>:"/\|?*` + "\x00"
 // All fields are sanitised for filesystem safety. Missing fields are
 // replaced by sensible fallbacks so the result is always a usable name.
 func OsuFilename(artist, title, creator, diffName string) string {
+	return OsuFilenameVersioned(artist, title, creator, diffName, 0)
+}
+
+// OsuFilenameVersioned behaves like OsuFilename but appends " v<N>" to
+func OsuFilenameVersioned(artist, title, creator, diffName string, version int) string {
 	artist = sanitise(artist)
 	title = sanitise(title)
 	creator = sanitise(creator)
@@ -33,22 +39,22 @@ func OsuFilename(artist, title, creator, diffName string) string {
 	if diffName == "" {
 		diffName = DefaultDifficultyName
 	}
+	if version > 0 {
+		diffName = fmt.Sprintf("%s v%d", diffName, version)
+	}
 
 	return artist + " - " + title + " (" + creator + ") [" + diffName + "].osu"
 }
 
 // DefaultExportPath returns the absolute path where a generated
-// hitsound diff should be written by default:
-//
-//	<exportsDir>/<Artist> - <Title> (<Creator>) [<DefaultDifficultyName>].osu
-//
-// Fields come from ref.Metadata; any missing field falls back to the
-// same placeholders OsuFilename uses, so the returned path is always
-// a usable filename.
-//
-// ref may be nil — in that case the full placeholder filename is used.
-// exportsDir must be set by the caller; the helper performs no I/O.
+// hitsound diff should be written by default.
 func DefaultExportPath(exportsDir string, ref *domain.OsuMap) string {
+	return DefaultExportPathVersioned(exportsDir, ref, 0)
+}
+
+// DefaultExportPathVersioned builds the canonical export path and
+// appends " v<N>" to the diff name when version > 0.
+func DefaultExportPathVersioned(exportsDir string, ref *domain.OsuMap, version int) string {
 	var artist, title, creator string
 	if ref != nil {
 		artist = ref.Metadata["Artist"]
@@ -56,7 +62,7 @@ func DefaultExportPath(exportsDir string, ref *domain.OsuMap) string {
 		creator = ref.Metadata["Creator"]
 	}
 	return filepath.Join(exportsDir,
-		OsuFilename(artist, title, creator, DefaultDifficultyName))
+		OsuFilenameVersioned(artist, title, creator, DefaultDifficultyName, version))
 }
 
 func sanitise(s string) string {

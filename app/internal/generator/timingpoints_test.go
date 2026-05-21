@@ -68,8 +68,8 @@ func TestGenerateTimingPoints_FirstStateBeforeAnyRed(t *testing.T) {
 	if !out[1].IsRed() {
 		t.Errorf("expected red second, got %+v", out[1])
 	}
-	if out[1].SampleSet != 1 {
-		t.Errorf("red SampleSet changed to %d, want 1 (preserved)", out[1].SampleSet)
+	if out[1].SampleSet != 0 {
+		t.Errorf("red SampleSet = %d, want 0", out[1].SampleSet)
 	}
 	if out[1].SampleIndex != 2 || out[1].Volume != 60 {
 		t.Errorf("red should adopt index/volume, got %+v", out[1])
@@ -202,8 +202,8 @@ func TestGenerateTimingPoints_RedOnSameTimestampUpdatedInPlace(t *testing.T) {
 	if tp.BeatLength != 500 {
 		t.Errorf("red BeatLength lost: %g", tp.BeatLength)
 	}
-	if tp.SampleSet != 1 {
-		t.Errorf("red SampleSet changed to %d, want 1 (preserved)", tp.SampleSet)
+	if tp.SampleSet != 0 {
+		t.Errorf("red SampleSet = %d, want 0", tp.SampleSet)
 	}
 	if tp.SampleIndex != 3 || tp.Volume != 65 {
 		t.Errorf("red index/volume not updated: %+v", tp)
@@ -245,20 +245,21 @@ func TestGenerateTimingPoints_RedInBetweenKeepsEffectiveState(t *testing.T) {
 	if mid.BeatLength != 400 {
 		t.Errorf("middle red BeatLength lost: %g", mid.BeatLength)
 	}
-	if mid.SampleSet != 1 {
-		t.Errorf("middle red SampleSet changed to %d, want 1 (preserved)", mid.SampleSet)
+	if mid.SampleSet != 0 {
+		t.Errorf("middle red SampleSet = %d, want 0", mid.SampleSet)
 	}
 	if mid.SampleIndex != 2 || mid.Volume != 60 {
 		t.Errorf("middle red did not adopt index/volume: %+v", mid)
 	}
 }
 
-func TestGenerateTimingPoints_PreFirstGroupRedKeepsOriginalState(t *testing.T) {
+func TestGenerateTimingPoints_PreFirstGroupRedUsesCleanDefaultState(t *testing.T) {
 	groups := []timing.FinalGroup{
 		fg(5000, 60, 2, []domain.Sampleset{domain.SamplesetDrum}),
 	}
 	original := redTP(0, 500)
 	original.Volume = 77
+	original.SampleSet = 3
 	original.SampleIndex = 4
 	reds := []domain.TimingPoint{original}
 
@@ -266,8 +267,26 @@ func TestGenerateTimingPoints_PreFirstGroupRedKeepsOriginalState(t *testing.T) {
 	if !out[0].IsRed() || out[0].Time != 0 {
 		t.Fatalf("expected red first at 0, got %+v", out[0])
 	}
-	if out[0].Volume != 77 || out[0].SampleIndex != 4 {
-		t.Errorf("pre-first-group red should keep original state, got %+v", out[0])
+	if out[0].SampleSet != 0 || out[0].SampleIndex != 0 || out[0].Volume != 100 {
+		t.Errorf("pre-first-group red state = %+v, want auto/0/100", out[0])
+	}
+}
+
+func TestGenerateTimingPoints_ReferenceRedCustomSampleStateIsOverwritten(t *testing.T) {
+	groups := []timing.FinalGroup{
+		fg(1000, 64, 2, []domain.Sampleset{domain.SamplesetDrum}),
+	}
+	dirtyRed := redTP(1000, 500)
+	dirtyRed.SampleSet = 3
+	dirtyRed.SampleIndex = 1
+	dirtyRed.Volume = 44
+
+	out := GenerateTimingPoints(groups, []domain.TimingPoint{dirtyRed})
+	if len(out) != 1 {
+		t.Fatalf("got %d TPs, want 1", len(out))
+	}
+	if out[0].SampleSet != 0 || out[0].SampleIndex != 2 || out[0].Volume != 64 {
+		t.Fatalf("red state = %+v, want auto/2/64", out[0])
 	}
 }
 
@@ -307,11 +326,11 @@ func TestGenerateTimingPoints_GoldenFullFlow(t *testing.T) {
 	}
 
 	want := []key{
-		{Time: 0, Kind: "red", SampleSet: 1, SampleIndex: 0, Volume: 100, BeatLength: 500},
+		{Time: 0, Kind: "red", SampleSet: 0, SampleIndex: 0, Volume: 100, BeatLength: 500},
 		{Time: 1000, Kind: "green", SampleSet: 0, SampleIndex: 0, Volume: 60, BeatLength: -100},
 		{Time: 2000, Kind: "green", SampleSet: 0, SampleIndex: 0, Volume: 80, BeatLength: -100},
 		{Time: 3000, Kind: "green", SampleSet: 0, SampleIndex: 2, Volume: 80, BeatLength: -100},
-		{Time: 4000, Kind: "red", SampleSet: 1, SampleIndex: 2, Volume: 70, BeatLength: 400},
+		{Time: 4000, Kind: "red", SampleSet: 0, SampleIndex: 2, Volume: 70, BeatLength: 400},
 	}
 
 	if !reflect.DeepEqual(got, want) {

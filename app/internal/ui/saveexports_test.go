@@ -1,10 +1,12 @@
 package ui
 
 import (
+	"archive/zip"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"osu-daws-app/internal/domain"
 	"osu-daws-app/internal/pipeline"
@@ -164,5 +166,93 @@ func TestSetWorkspaceExportsDir_EmptyClears(t *testing.T) {
 	vm.SetWorkspaceExportsDir("")
 	if vm.WorkspaceExportsDir() != "" {
 		t.Errorf("expected empty, got %q", vm.WorkspaceExportsDir())
+	}
+}
+
+func TestLatestExportedDiffPathFallsBackToNewestOsuInExports(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.osu")
+	newPath := filepath.Join(dir, "new.osu")
+	if err := os.WriteFile(oldPath, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newPath, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldTime := time.Now().Add(-time.Hour)
+	newTime := time.Now()
+	if err := os.Chtimes(oldPath, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(newPath, newTime, newTime); err != nil {
+		t.Fatal(err)
+	}
+
+	vm := NewViewModel(nil, nil)
+	vm.SetWorkspaceExportsDir(dir)
+
+	got, err := vm.LatestExportedDiffPath()
+	if err != nil {
+		t.Fatalf("LatestExportedDiffPath failed: %v", err)
+	}
+	if got != newPath {
+		t.Fatalf("LatestExportedDiffPath = %q, want %q", got, newPath)
+	}
+}
+
+func TestExportHSDiffZip(t *testing.T) {
+	root := t.TempDir()
+	beatmapDir := filepath.Join(root, "osu")
+	exportsDir := filepath.Join(root, "exports")
+	if err := os.MkdirAll(beatmapDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(exportsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	refPath := filepath.Join(beatmapDir, "ref.osu")
+	if err := os.WriteFile(refPath, []byte("ref"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name := range map[string]bool{"soft-hitnormal.wav": true, "drum-clap.ogg": true, "audio.mp3": true} {
+		if err := os.WriteFile(filepath.Join(beatmapDir, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	vm := NewViewModel(nil, nil)
+	vm.ReferencePath = refPath
+	vm.SetWorkspaceExportsDir(exportsDir)
+	res := newResult("generated", map[string]string{"Artist": "A", "Title": "T", "Creator": "C"})
+	if _, err := vm.SaveToExports(res); err != nil {
+		t.Fatal(err)
+	}
+
+	zipPath := filepath.Join(root, "hs-bundle.zip")
+	zipRes, err := vm.ExportHSDiffZip(zipPath)
+	if err != nil {
+		t.Fatalf("ExportHSDiffZip failed: %v", err)
+	}
+	if zipRes.ZipPath != zipPath {
+		t.Fatalf("ZipPath = %q, want %q", zipRes.ZipPath, zipPath)
+	}
+
+	zr, err := zip.OpenReader(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zr.Close()
+
+	entries := map[string]bool{}
+	for _, f := range zr.File {
+		entries[f.Name] = true
+	}
+	for _, want := range []string{filepath.Base(vm.LastSavedExportPath()), "soft-hitnormal.wav", "drum-clap.ogg"} {
+		if !entries[want] {
+			t.Fatalf("zip missing %q; entries=%v", want, entries)
+		}
+	}
+	if entries["audio.mp3"] {
+		t.Fatal("zip should not include non-hitsound audio.mp3")
 	}
 }

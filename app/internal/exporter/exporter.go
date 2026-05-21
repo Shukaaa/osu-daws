@@ -16,18 +16,20 @@ const (
 	DefaultDifficultyName = "osu!daw's HS"
 )
 
-// Options controls export-time behaviour.
 type Options struct {
-	// DifficultyName, if non-empty, overrides Metadata.Version verbatim.
-	// When empty, DefaultDifficultyName is used.
 	DifficultyName string
+	Version        int
 }
 
 func (o Options) diffName() string {
-	if o.DifficultyName != "" {
-		return o.DifficultyName
+	base := o.DifficultyName
+	if base == "" {
+		base = DefaultDifficultyName
 	}
-	return DefaultDifficultyName
+	if o.Version > 0 {
+		return fmt.Sprintf("%s v%d", base, o.Version)
+	}
+	return base
 }
 
 var sectionKeyOrder = map[string][]string{

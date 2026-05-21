@@ -21,6 +21,13 @@ func ApplyWorkspaceState(vm *ViewModel, ws *workspace.Workspace) {
 	if s := ws.Project.DefaultSampleset; s != "" {
 		vm.DefaultSampleset = s
 	}
+	vm.VersioningEnabled = ws.Project.VersioningEnabled
+	if ws.Project.VolumeStep >= 0 && ws.Project.VolumeStep <= 100 {
+		vm.VolumeStep = ws.Project.VolumeStep
+	} else {
+		vm.VolumeStep = 0
+	}
+	vm.SetLastExportVersion(ws.Project.LastExportVersion)
 	vm.SetWorkspaceExportsDir(ws.Paths.Exports)
 
 	if len(ws.Project.Segments) == 0 {
@@ -49,6 +56,9 @@ func PersistToWorkspace(vm *ViewModel, ws *workspace.Workspace) error {
 	if vm.DefaultSampleset != "" {
 		ws.Project.DefaultSampleset = vm.DefaultSampleset
 	}
+	ws.Project.VersioningEnabled = vm.VersioningEnabled
+	ws.Project.VolumeStep = vm.VolumeStep
+	ws.Project.LastExportVersion = vm.LastExportVersion()
 
 	out := make([]workspace.SegmentInput, 0, len(vm.Segments))
 	for _, s := range vm.Segments {

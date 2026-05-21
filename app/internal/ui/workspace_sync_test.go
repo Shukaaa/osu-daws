@@ -35,6 +35,7 @@ func TestApplyWorkspaceState_FullState(t *testing.T) {
 	ws := newTestWorkspaceOnDisk(t, func(pf *workspace.ProjectFile) {
 		pf.ReferenceOsuPath = "/maps/song/normal.osu"
 		pf.DefaultSampleset = domain.SamplesetDrum
+		pf.VolumeStep = 5
 		pf.Segments = []workspace.SegmentInput{
 			{SourceMapJSON: validSMUI, StartTimeText: "1000"},
 			{SourceMapJSON: "", StartTimeText: ""},
@@ -49,6 +50,9 @@ func TestApplyWorkspaceState_FullState(t *testing.T) {
 	}
 	if vm.DefaultSampleset != domain.SamplesetDrum {
 		t.Errorf("DefaultSampleset = %q", vm.DefaultSampleset)
+	}
+	if vm.VolumeStep != 5 {
+		t.Errorf("VolumeStep = %d, want 5", vm.VolumeStep)
 	}
 	if got := vm.WorkspaceExportsDir(); got != ws.Paths.Exports {
 		t.Errorf("WorkspaceExportsDir = %q, want %q", got, ws.Paths.Exports)
@@ -107,6 +111,7 @@ func TestPersistToWorkspace_Roundtrip(t *testing.T) {
 	// Mutate the VM the way the UI would.
 	vm.ReferencePath = "/maps/new/hard.osu"
 	vm.DefaultSampleset = domain.SamplesetNormal
+	vm.VolumeStep = 10
 	vm.Segments = []*SegmentInput{
 		{SourceMapJSON: validSMUI, StartTimeText: "1234", Status: "ignored"},
 		{SourceMapJSON: "", StartTimeText: "", Status: "placeholder"},
@@ -128,12 +133,29 @@ func TestPersistToWorkspace_Roundtrip(t *testing.T) {
 	if reloaded.Project.DefaultSampleset != domain.SamplesetNormal {
 		t.Errorf("DefaultSampleset = %q", reloaded.Project.DefaultSampleset)
 	}
+	if reloaded.Project.VolumeStep != 10 {
+		t.Errorf("VolumeStep = %d, want 10", reloaded.Project.VolumeStep)
+	}
 	if len(reloaded.Project.Segments) != 2 {
 		t.Fatalf("Segments len = %d", len(reloaded.Project.Segments))
 	}
 	if reloaded.Project.Segments[0].SourceMapJSON != validSMUI ||
 		reloaded.Project.Segments[0].StartTimeText != "1234" {
 		t.Errorf("Segment[0] = %+v", reloaded.Project.Segments[0])
+	}
+}
+
+func TestApplyWorkspaceState_InvalidVolumeStepFallsBackToOff(t *testing.T) {
+	ws := newTestWorkspaceOnDisk(t, func(pf *workspace.ProjectFile) {
+		pf.VolumeStep = 101
+	})
+
+	vm := NewViewModel(&stubClipboard{}, nil)
+	vm.VolumeStep = 5
+	ApplyWorkspaceState(vm, ws)
+
+	if vm.VolumeStep != 0 {
+		t.Errorf("VolumeStep = %d, want 0", vm.VolumeStep)
 	}
 }
 

@@ -89,10 +89,13 @@ type ProjectFile struct {
 
 	ReferenceOsuPath string           `json:"reference_osu_path,omitempty"`
 	DefaultSampleset domain.Sampleset `json:"default_sampleset"`
+	VolumeStep       int              `json:"volume_step,omitempty"`
 
 	Segments []SegmentInput `json:"segments"`
 
-	Archived bool `json:"archived,omitempty"`
+	VersioningEnabled bool `json:"versioning_enabled,omitempty"`
+	LastExportVersion int  `json:"last_export_version,omitempty"`
+	Archived          bool `json:"archived,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

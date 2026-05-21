@@ -44,6 +44,11 @@ type Request struct {
 	ReferenceOsu     io.Reader
 	DefaultSampleset domain.Sampleset
 	ExportOptions    exporter.Options
+
+	// VolumeFormatter normalizes raw event volumes to a fixed step (e.g.
+	// every 5%). It is applied per segment right after parsing so all
+	// downstream tick conflict validation operates on rounded values.
+	VolumeFormatter domain.VolumeFormatter
 }
 
 type Result struct {
@@ -114,6 +119,11 @@ func Generate(req Request) (*Result, *Error) {
 		sm, vr := sourcemap.Parse(seg.SourceMapJSON)
 		if !vr.OK() {
 			return nil, failSegmentValidation(StageSourceMapParse, i, vr)
+		}
+		if req.VolumeFormatter.Enabled() {
+			for j := range sm.Events {
+				sm.Events[j].Volume = req.VolumeFormatter.Apply(sm.Events[j].Volume)
+			}
 		}
 		tickGroups := sourcemap.GroupByTick(sm.Events)
 		if vr := sourcemap.ValidateTickGroups(tickGroups); !vr.OK() {

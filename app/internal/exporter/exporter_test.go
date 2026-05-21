@@ -209,6 +209,47 @@ func TestExport_IgnoresReferenceGreensAndHitObjects(t *testing.T) {
 	}
 }
 
+func TestExport_ReferenceRedCustomSampleStateDoesNotLeak(t *testing.T) {
+	ref := buildReference()
+	dirtyRed := domain.TimingPoint{
+		Time:        0,
+		BeatLength:  500,
+		Meter:       4,
+		SampleSet:   3,
+		SampleIndex: 1,
+		Volume:      44,
+		Uninherited: true,
+	}
+	groups := []timing.FinalGroup{
+		{
+			TimeMs: 1000, Volume: 62, CustomIndex: 2,
+			Samplesets: []domain.Sampleset{domain.SamplesetDrum},
+			Sounds:     []domain.Sound{domain.SoundNormal},
+			Events: []timing.ConvertedEvent{{
+				Source: domain.SourceEvent{Sampleset: domain.SamplesetDrum, CustomIndex: 2, Sound: domain.SoundNormal, Volume: 62},
+				TimeMs: 1000,
+			}},
+		},
+	}
+	tps := generator.GenerateTimingPoints(groups, []domain.TimingPoint{dirtyRed})
+	hos, hvr := generator.GenerateHitObjects(groups, domain.SamplesetSoft)
+	if hvr != nil {
+		t.Fatal(hvr.Error())
+	}
+
+	out := Export(ref, tps, hos, Options{})
+
+	if strings.Contains(out, "0,500,4,3,1,44,1,0") {
+		t.Fatal("dirty reference red timing point state leaked into export")
+	}
+	if !strings.Contains(out, "0,500,4,0,0,100,1,0") {
+		t.Fatalf("cleaned red timing point missing from export:\n%s", out)
+	}
+	if !strings.Contains(out, "1000,-100,4,0,2,62,0,0") {
+		t.Fatalf("generated green timing point missing from export:\n%s", out)
+	}
+}
+
 func TestExport_DefaultDifficultyName(t *testing.T) {
 	ref := buildReference()
 	out := Export(ref, nil, nil, Options{})

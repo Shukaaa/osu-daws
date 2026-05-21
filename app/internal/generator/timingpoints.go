@@ -14,7 +14,11 @@ type HitsoundState struct {
 
 const DefaultGreenBeatLength = -100.0
 
-const greenSampleSet = 0
+const (
+	timingPointAutoSampleSet = 0
+	defaultSampleIndex       = 0
+	defaultVolume            = 100
+)
 
 func ComputeState(g timing.FinalGroup) HitsoundState {
 	return HitsoundState{
@@ -23,24 +27,8 @@ func ComputeState(g timing.FinalGroup) HitsoundState {
 	}
 }
 
-// GenerateTimingPoints merges preserved red timing points with generated
-// green timing points derived from the final groups.
-//
-// Generation rules:
-//
-//  1. Reds from the reference map are preserved in place (Time, BeatLength,
-//     Meter, SampleSet, Effects unchanged). Their SampleIndex and Volume
-//     are rewritten to match the hitsound state that is active when we
-//     reach them, so they do not visually "reset" playback state.
-//  2. A green line is emitted only when volume or custom sample index
-//     changes between consecutive groups. Note-level sampleset switches
-//     alone never emit a timing point; that information lives on the hit
-//     object itself.
-//  3. If a state change lands exactly on a red's timestamp, the red is
-//     updated in place instead of inserting a redundant green at the same ms.
-//  4. Reds preceding the first group keep their original state.
-//  5. Generated greens use SampleSet = 0 (inherit) so they do not interfere
-//     with the explicit per-hitobject sampleset decisions.
+// GenerateTimingPoints merges reference red timing points with generated green timing points.
+// Reference reds keep BPM/meter/effects, but their hitsound sample state is rewritten so stale reference custom samples do not leak into the generated diff.
 func GenerateTimingPoints(
 	groups []timing.FinalGroup,
 	reds []domain.TimingPoint,
@@ -71,21 +59,11 @@ func GenerateTimingPoints(
 			}
 
 			if j < len(sortedGroups) && sortedGroups[j].TimeMs == r.Time {
-				desired := ComputeState(sortedGroups[j])
-				if !haveEffective || effective != desired {
-					r.SampleIndex = desired.SampleIndex
-					r.Volume = desired.Volume
-					effective = desired
-					haveEffective = true
-				} else {
-					r.SampleIndex = effective.SampleIndex
-					r.Volume = effective.Volume
-				}
+				effective = ComputeState(sortedGroups[j])
+				haveEffective = true
 				j++
-			} else if haveEffective {
-				r.SampleIndex = effective.SampleIndex
-				r.Volume = effective.Volume
 			}
+			r = applyRedHitsoundState(r, effective, haveEffective)
 
 			out = append(out, r)
 			i++
@@ -99,7 +77,7 @@ func GenerateTimingPoints(
 				Time:        g.TimeMs,
 				BeatLength:  DefaultGreenBeatLength,
 				Meter:       lastMeter,
-				SampleSet:   greenSampleSet,
+				SampleSet:   timingPointAutoSampleSet,
 				SampleIndex: desired.SampleIndex,
 				Volume:      desired.Volume,
 				Uninherited: false,
@@ -112,4 +90,16 @@ func GenerateTimingPoints(
 	}
 
 	return out
+}
+
+func applyRedHitsoundState(tp domain.TimingPoint, state HitsoundState, haveState bool) domain.TimingPoint {
+	tp.SampleSet = timingPointAutoSampleSet
+	if !haveState {
+		tp.SampleIndex = defaultSampleIndex
+		tp.Volume = defaultVolume
+		return tp
+	}
+	tp.SampleIndex = state.SampleIndex
+	tp.Volume = state.Volume
+	return tp
 }
